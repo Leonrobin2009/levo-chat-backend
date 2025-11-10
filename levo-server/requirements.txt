@@ -2,3 +2,5 @@ flask
 transformers
 torch
 requests
+accelerate
+safetensors
