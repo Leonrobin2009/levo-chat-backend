@@ -7,9 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-from pydub import AudioSegment
 from groq import Groq
-
 # ----------------------
 #  CONFIG + CLIENT
 # ----------------------
