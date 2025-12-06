@@ -17,7 +17,7 @@ async def chat(request: Request):
             return JSONResponse({"response": "No prompt provided"}, status_code=400)
 
         completion = client.chat.completions.create(
-            model = "llama-3.1-8b-instant",
+            model="llama-3.1-70b-versatile",
             messages=[
                 {"role": "system", "content": "You are lEvO, a friendly intelligent AI."},
                 {"role": "user", "content": prompt},
@@ -35,4 +35,5 @@ async def chat(request: Request):
 @app.get("/")
 def home():
     return {"status": "lEvO API running!"}
+
 
