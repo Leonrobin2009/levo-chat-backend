@@ -1,5 +1,5 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from groq import Groq
 import os
 
@@ -7,27 +7,32 @@ app = FastAPI()
 
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-class Message(BaseModel):
-    prompt: str
+@app.post("/chat")
+async def chat(request: Request):
+    try:
+        data = await request.json()
+        prompt = data.get("prompt", "")
 
-SYSTEM_PROMPT = """
-You are lEvO — a Gen-Z, energetic, smart assistant created by Leon.
-Speak casually, friendly, fast, and helpful. Keep answers short.
-"""
+        if prompt == "":
+            return JSONResponse({"response": "No prompt provided"}, status_code=400)
+
+        completion = client.chat.completions.create(
+            model="mixtral-8x7b-32768",
+            messages=[
+                {"role": "system", "content": "You are lEvO, a friendly intelligent AI."},
+                {"role": "user", "content": prompt},
+            ]
+        )
+
+        # FIXED: Groq returns .message.content
+        reply = completion.choices[0].message.content
+
+        return {"response": reply}
+
+    except Exception as e:
+        return JSONResponse({"response": f"Server crashed: {str(e)}"}, status_code=500)
+
 
 @app.get("/")
-async def home():
-    return {"message": "lEvO is alive on Render with Groq!"}
-
-@app.post("/chat")
-async def chat(msg: Message):
-    completion = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": msg.prompt}
-        ],
-        temperature=0.7
-    )
-    reply = completion.choices[0].message["content"]
-    return {"response": reply}
+def home():
+    return {"status": "lEvO API running!"}
