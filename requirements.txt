@@ -1,3 +1,7 @@
 fastapi
 uvicorn
 groq
+requests
+pydub
+slowapi
+python-multipart
