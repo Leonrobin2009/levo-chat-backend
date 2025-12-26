@@ -5,6 +5,7 @@ import requests
 import matplotlib.pyplot as plt
 from datetime import datetime
 from uuid import uuid4
+from urllib.parse import quote_plus
 
 from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -40,27 +41,21 @@ app.add_middleware(
 )
 
 # ==========================================================
-# SYSTEM PROMPT (FIXED, NON-CRINGE)
+# SYSTEM PROMPT
 # ==========================================================
 SYSTEM_PROMPT = """
 You are lEvO, a smart and calm AI assistant.
 
 Rules:
-- Be friendly, not overdramatic
-- Short replies for small talk (hi, ok, thanks)
-- Long answers ONLY when user asks for explanation
-- Do NOT invent dates, news, or events
-- Use live data ONLY if provided
-- Do NOT add links unless they are genuinely useful
-
-Tone:
-- Natural
-- Helpful
-- Accurate
+- Short replies for small talk
+- Long replies only when needed
+- NEVER invent links
+- If links are provided, format them nicely
+- Be accurate, not dramatic
 """
 
 # ==========================================================
-# MEMORY (SQLite)
+# MEMORY
 # ==========================================================
 conn = sqlite3.connect("memory.db", check_same_thread=False)
 cursor = conn.cursor()
@@ -76,23 +71,21 @@ def save_memory(uid, msg):
     conn.commit()
 
 # ==========================================================
-# HOME
+# LINK SEARCH (REAL)
 # ==========================================================
-@app.get("/")
-def home():
-    return {"status": "lEvO API is live 🚀"}
+def get_links(query: str, site: str = None, limit=5):
+    q = query
+    if site:
+        q += f" site:{site}"
+    url = f"https://ddg-api.herokuapp.com/search?query={quote_plus(q)}"
+    data = requests.get(url).json()
+    results = []
+    for r in data.get("results", [])[:limit]:
+        results.append(f"- [{r['title']}]({r['url']})")
+    return "\n".join(results)
 
 # ==========================================================
-# LIVE NEWS
-# ==========================================================
-@app.get("/news")
-def news(topic: str = "technology"):
-    url = "https://newsapi.org/v2/top-headlines"
-    params = {"q": topic, "apiKey": NEWS_API_KEY}
-    return requests.get(url, params=params).json()
-
-# ==========================================================
-# NORMAL CHAT (SMART)
+# CHAT
 # ==========================================================
 @app.post("/chat")
 @limiter.limit("15/minute")
@@ -101,17 +94,34 @@ async def chat(request: Request):
     prompt = data.get("prompt", "").strip()
     user_id = data.get("user_id", "guest")
 
+    today = datetime.now().strftime("%A, %d %B %Y")
     memory = get_memory(user_id)
 
-    # ✅ REAL LIVE DATE
-    today = datetime.now().strftime("%A, %d %B %Y")
+    # 🔍 Detect link intent
+    wants_amazon = "amazon" in prompt.lower()
+    wants_youtube = "youtube" in prompt.lower()
+
+    link_block = ""
+
+    if wants_amazon:
+        link_block = get_links(prompt, site="amazon.com")
+
+    if wants_youtube:
+        link_block = get_links(prompt, site="youtube.com")
 
     msgs = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "system", "content": f"Today's real date is {today}. Use this if asked."},
+        {"role": "system", "content": f"Today's real date is {today}"},
         {"role": "system", "content": f"Conversation memory:\n{memory}"},
-        {"role": "user", "content": prompt},
     ]
+
+    if link_block:
+        msgs.append({
+            "role": "system",
+            "content": f"Here are verified real links:\n{link_block}"
+        })
+
+    msgs.append({"role": "user", "content": prompt})
 
     completion = client.chat.completions.create(
         model="llama-3.1-8b-instant",
@@ -127,49 +137,25 @@ async def chat(request: Request):
     return {"response": reply}
 
 # ==========================================================
-# STREAMING CHAT
-# ==========================================================
-@app.get("/stream")
-async def stream(prompt: str):
-    def generate():
-        completion = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": prompt}
-            ],
-            stream=True
-        )
-        for chunk in completion:
-            if chunk.choices and chunk.choices[0].delta.content:
-                yield f"data: {chunk.choices[0].delta.content}\n\n"
-        yield "data: [DONE]\n\n"
-
-    return StreamingResponse(generate(), media_type="text/event-stream")
-
-# ==========================================================
 # IMAGE ANALYSIS
 # ==========================================================
 @app.post("/vision")
 async def vision(file: UploadFile = File(...)):
-    img_bytes = await file.read()
-    img_b64 = base64.b64encode(img_bytes).decode()
-
+    img = base64.b64encode(await file.read()).decode()
     completion = client.chat.completions.create(
         model="llava-v1.6",
         messages=[{
             "role": "user",
             "content": [
-                {"type": "input_text", "text": "Analyze this image clearly."},
-                {"type": "input_image", "image": img_b64}
+                {"type": "input_text", "text": "Analyze this image."},
+                {"type": "input_image", "image": img}
             ]
         }]
     )
-
     return {"response": completion.choices[0].message.content}
 
 # ==========================================================
-# IMAGE GENERATION (SDXL)
+# IMAGE GENERATION
 # ==========================================================
 @app.post("/image-generate")
 def image_generate(prompt: str):
@@ -180,56 +166,41 @@ def image_generate(prompt: str):
     return {"image_url": output[0]}
 
 # ==========================================================
-# PDF CREATION
+# FILE GENERATION
 # ==========================================================
 @app.post("/create-pdf")
 def create_pdf(text: str):
-    filename = f"{uuid4()}.pdf"
+    name = f"{uuid4()}.pdf"
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
     pdf.multi_cell(0, 8, text)
-    pdf.output(filename)
-    return FileResponse(filename)
+    pdf.output(name)
+    return FileResponse(name)
 
-# ==========================================================
-# TXT FILE
-# ==========================================================
 @app.post("/create-txt")
 def create_txt(text: str):
-    filename = f"{uuid4()}.txt"
-    with open(filename, "w") as f:
-        f.write(text)
-    return FileResponse(filename)
+    name = f"{uuid4()}.txt"
+    open(name, "w").write(text)
+    return FileResponse(name)
 
-# ==========================================================
-# PPTX
-# ==========================================================
 @app.post("/create-ppt")
 def create_ppt(text: str):
-    filename = f"{uuid4()}.pptx"
+    name = f"{uuid4()}.pptx"
     prs = Presentation()
     slide = prs.slides.add_slide(prs.slide_layouts[1])
     slide.shapes.title.text = "Generated by lEvO"
     slide.placeholders[1].text = text
-    prs.save(filename)
-    return FileResponse(filename)
+    prs.save(name)
+    return FileResponse(name)
 
 # ==========================================================
 # GRAPH
 # ==========================================================
 @app.get("/graph")
 def graph():
-    filename = f"{uuid4()}.png"
-    plt.plot([1, 2, 3, 4], [10, 20, 15, 30])
-    plt.savefig(filename)
+    name = f"{uuid4()}.png"
+    plt.plot([1, 2, 3], [10, 25, 15])
+    plt.savefig(name)
     plt.close()
-    return FileResponse(filename)
-
-# ==========================================================
-# SEARCH (RAG)
-# ==========================================================
-@app.get("/search")
-def search(q: str):
-    url = f"https://ddg-api.herokuapp.com/search?query={q}"
-    return requests.get(url).json()
+    return FileResponse(name)
