@@ -3,10 +3,12 @@ import sqlite3
 import base64
 import requests
 import matplotlib.pyplot as plt
+from datetime import datetime
+from uuid import uuid4
 
 from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
+from fastapi.responses import StreamingResponse, FileResponse
 
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -38,24 +40,23 @@ app.add_middleware(
 )
 
 # ==========================================================
-# SYSTEM PROMPT (INTELLIGENCE BOOST)
+# SYSTEM PROMPT (FIXED, NON-CRINGE)
 # ==========================================================
 SYSTEM_PROMPT = """
-You are lEvO — an advanced AI assistant.
+You are lEvO, a smart and calm AI assistant.
 
-Capabilities:
-- Think deeply and reason step-by-step
-- Give long, structured, detailed answers
-- Use headings, bullet points, tables
-- Be accurate and honest
-- Always output clickable links
+Rules:
+- Be friendly, not overdramatic
+- Short replies for small talk (hi, ok, thanks)
+- Long answers ONLY when user asks for explanation
+- Do NOT invent dates, news, or events
+- Use live data ONLY if provided
+- Do NOT add links unless they are genuinely useful
 
-Style:
-- Friendly, confident, modern
-- Not robotic
-- Helpful and intelligent
-
-If live data is provided, prioritize it.
+Tone:
+- Natural
+- Helpful
+- Accurate
 """
 
 # ==========================================================
@@ -68,7 +69,7 @@ conn.commit()
 
 def get_memory(uid):
     cursor.execute("SELECT text FROM memory WHERE user_id=?", (uid,))
-    return "\n".join([row[0] for row in cursor.fetchall()])
+    return "\n".join(row[0] for row in cursor.fetchall())
 
 def save_memory(uid, msg):
     cursor.execute("INSERT INTO memory VALUES (?, ?)", (uid, msg))
@@ -79,41 +80,47 @@ def save_memory(uid, msg):
 # ==========================================================
 @app.get("/")
 def home():
-    return {"status": "lEvO AI API is LIVE 🔥"}
+    return {"status": "lEvO API is live 🚀"}
 
 # ==========================================================
 # LIVE NEWS
 # ==========================================================
 @app.get("/news")
 def news(topic: str = "technology"):
-    url = f"https://newsapi.org/v2/top-headlines?q={topic}&apiKey={NEWS_API_KEY}"
-    return requests.get(url).json()
+    url = "https://newsapi.org/v2/top-headlines"
+    params = {"q": topic, "apiKey": NEWS_API_KEY}
+    return requests.get(url, params=params).json()
 
 # ==========================================================
-# NORMAL CHAT (LONG RESPONSES)
+# NORMAL CHAT (SMART)
 # ==========================================================
 @app.post("/chat")
 @limiter.limit("15/minute")
 async def chat(request: Request):
     data = await request.json()
-    prompt = data.get("prompt", "")
+    prompt = data.get("prompt", "").strip()
     user_id = data.get("user_id", "guest")
 
     memory = get_memory(user_id)
 
+    # ✅ REAL LIVE DATE
+    today = datetime.now().strftime("%A, %d %B %Y")
+
     msgs = [
         {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": f"Today's real date is {today}. Use this if asked."},
         {"role": "system", "content": f"Conversation memory:\n{memory}"},
-        {"role": "user", "content": prompt}
+        {"role": "user", "content": prompt},
     ]
 
     completion = client.chat.completions.create(
         model="llama-3.1-8b-instant",
         messages=msgs,
-        max_tokens=4096
+        max_tokens=2048
     )
 
     reply = completion.choices[0].message.content
+
     save_memory(user_id, prompt)
     save_memory(user_id, reply)
 
@@ -150,12 +157,13 @@ async def vision(file: UploadFile = File(...)):
 
     completion = client.chat.completions.create(
         model="llava-v1.6",
-        messages=[
-            {"role": "user", "content": [
-                {"type": "input_text", "text": "Analyze this image deeply."},
-                {"type": "input_image", "image": img_b64},
-            ]}
-        ]
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Analyze this image clearly."},
+                {"type": "input_image", "image": img_b64}
+            ]
+        }]
     )
 
     return {"response": completion.choices[0].message.content}
@@ -176,45 +184,50 @@ def image_generate(prompt: str):
 # ==========================================================
 @app.post("/create-pdf")
 def create_pdf(text: str):
+    filename = f"{uuid4()}.pdf"
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
     pdf.multi_cell(0, 8, text)
-    pdf.output("output.pdf")
-    return FileResponse("output.pdf")
+    pdf.output(filename)
+    return FileResponse(filename)
 
 # ==========================================================
 # TXT FILE
 # ==========================================================
 @app.post("/create-txt")
 def create_txt(text: str):
-    with open("output.txt", "w") as f:
+    filename = f"{uuid4()}.txt"
+    with open(filename, "w") as f:
         f.write(text)
-    return FileResponse("output.txt")
+    return FileResponse(filename)
 
 # ==========================================================
 # PPTX
 # ==========================================================
 @app.post("/create-ppt")
 def create_ppt(text: str):
+    filename = f"{uuid4()}.pptx"
     prs = Presentation()
     slide = prs.slides.add_slide(prs.slide_layouts[1])
     slide.shapes.title.text = "Generated by lEvO"
     slide.placeholders[1].text = text
-    prs.save("output.pptx")
-    return FileResponse("output.pptx")
+    prs.save(filename)
+    return FileResponse(filename)
 
 # ==========================================================
 # GRAPH
 # ==========================================================
 @app.get("/graph")
 def graph():
-    plt.plot([1,2,3,4], [10,20,15,30])
-    plt.savefig("graph.png")
-    return FileResponse("graph.png")
+    filename = f"{uuid4()}.png"
+    plt.plot([1, 2, 3, 4], [10, 20, 15, 30])
+    plt.savefig(filename)
+    plt.close()
+    return FileResponse(filename)
 
 # ==========================================================
-# GOOGLE SEARCH (RAG)
+# SEARCH (RAG)
 # ==========================================================
 @app.get("/search")
 def search(q: str):
