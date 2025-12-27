@@ -2,14 +2,13 @@ import os
 import sqlite3
 import base64
 import requests
-import matplotlib.pyplot as plt
 from datetime import datetime
 from uuid import uuid4
 from urllib.parse import quote_plus
 
 from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -24,11 +23,10 @@ import replicate
 # ==========================================================
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN")
+BASE_URL = os.getenv("BASE_URL", "https://levo-server.onrender.com")
 
 client = Groq(api_key=GROQ_API_KEY)
 replicate_client = replicate.Client(api_token=REPLICATE_API_TOKEN)
-
-BASE_URL = os.getenv("BASE_URL", "https://your-render-app.onrender.com")
 
 app = FastAPI()
 limiter = Limiter(key_func=get_remote_address)
@@ -47,14 +45,8 @@ os.makedirs("files", exist_ok=True)
 # SYSTEM PROMPT
 # ==========================================================
 SYSTEM_PROMPT = """
-You are lEvO, a calm and intelligent AI.
-
-Rules:
-- Short replies for greetings
-- Detailed replies only when needed
-- NEVER invent links
-- If links exist, format clearly
-- No overacting
+You are lEvO, a calm and accurate AI assistant.
+No fake links. No hallucinations.
 """
 
 # ==========================================================
@@ -74,7 +66,7 @@ def save_memory(uid, msg):
     conn.commit()
 
 # ==========================================================
-# REAL LINK SEARCH
+# LINK SEARCH
 # ==========================================================
 def get_links(query, site=None):
     q = f"{query} site:{site}" if site else query
@@ -97,28 +89,27 @@ async def chat(request: Request):
     prompt = data.get("prompt", "")
     user_id = data.get("user_id", "guest")
 
-    today = datetime.now().strftime("%d %B %Y")
     memory = get_memory(user_id)
+    today = datetime.now().strftime("%d %B %Y")
 
     wants_amazon = "amazon" in prompt.lower()
     wants_youtube = "youtube" in prompt.lower()
 
-    link_data = ""
+    links = ""
     if wants_amazon:
-        link_data = get_links(prompt, "amazon.com")
+        links = get_links(prompt, "amazon.com")
     elif wants_youtube:
-        link_data = get_links(prompt, "youtube.com")
+        links = get_links(prompt, "youtube.com")
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "system", "content": f"Today's date: {today}"},
-        {"role": "system", "content": f"Memory:\n{memory}"}
+        {"role": "system", "content": f"Date: {today}"},
+        {"role": "system", "content": f"Memory:\n{memory}"},
+        {"role": "user", "content": prompt}
     ]
 
-    if link_data:
-        messages.append({"role": "system", "content": f"Verified links:\n{link_data}"})
-
-    messages.append({"role": "user", "content": prompt})
+    if links:
+        messages.insert(-1, {"role": "system", "content": f"Verified links:\n{links}"})
 
     completion = client.chat.completions.create(
         model="llama-3.1-8b-instant",
@@ -133,75 +124,65 @@ async def chat(request: Request):
     return {"response": reply}
 
 # ==========================================================
-# IMAGE ANALYSIS
+# IMAGE ANALYSIS (FIXED)
 # ==========================================================
 @app.post("/vision")
 async def vision(file: UploadFile = File(...)):
-    img = base64.b64encode(await file.read()).decode()
-    completion = client.chat.completions.create(
-        model="llava-v1.6",
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "input_text", "text": "Describe this image clearly."},
-                {"type": "input_image", "image": img}
-            ]
-        }]
+    image_bytes = await file.read()
+    image_b64 = base64.b64encode(image_bytes).decode()
+
+    output = replicate_client.run(
+        "salesforce/blip",
+        input={"image": f"data:image/jpeg;base64,{image_b64}"}
     )
-    return {"response": completion.choices[0].message.content}
+
+    return {"response": output}
 
 # ==========================================================
-# IMAGE GENERATION (REAL IMAGE + DOWNLOAD)
+# IMAGE GENERATION (FIXED)
 # ==========================================================
 @app.post("/image-generate")
 def image_generate(prompt: str):
     output = replicate_client.run(
-        "stability-ai/sdxl",
+        "stability-ai/sdxl:39ed52f2a78e934b3ba6e2a89f5b1c712de7f50c08b2c2a5f5c99f8b6f10c6fb",
         input={"prompt": prompt}
     )
 
-    image_url = output[0]
     return {
-        "image": image_url,
-        "download": image_url
+        "image": output[0],
+        "download": output[0]
     }
 
 # ==========================================================
-# PDF GENERATION (DOWNLOADABLE)
+# PDF
 # ==========================================================
 @app.post("/create-pdf")
 def create_pdf(text: str):
-    name = f"files/{uuid4()}.pdf"
+    path = f"files/{uuid4()}.pdf"
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
     pdf.multi_cell(0, 8, text)
-    pdf.output(name)
+    pdf.output(path)
 
-    return {
-        "file": f"{BASE_URL}/{name}",
-        "type": "pdf"
-    }
+    return {"file": f"{BASE_URL}/{path}", "type": "pdf"}
 
 # ==========================================================
-# PPT GENERATION (DOWNLOADABLE)
+# PPT
 # ==========================================================
 @app.post("/create-ppt")
 def create_ppt(text: str):
-    name = f"files/{uuid4()}.pptx"
+    path = f"files/{uuid4()}.pptx"
     prs = Presentation()
     slide = prs.slides.add_slide(prs.slide_layouts[1])
     slide.shapes.title.text = "Generated by lEvO"
     slide.placeholders[1].text = text
-    prs.save(name)
+    prs.save(path)
 
-    return {
-        "file": f"{BASE_URL}/{name}",
-        "type": "pptx"
-    }
+    return {"file": f"{BASE_URL}/{path}", "type": "pptx"}
 
 # ==========================================================
-# FILE SERVING
+# FILE SERVE
 # ==========================================================
 @app.get("/files/{filename}")
 def serve_file(filename: str):
