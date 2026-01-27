@@ -1,12 +1,3 @@
-fastapi
-uvicorn
-groq
+flask
 requests
-pydub
-slowapi
-fpdf
-python-pptx
-matplotlib
-replicate
-python-multipart
-
+gunicorn
