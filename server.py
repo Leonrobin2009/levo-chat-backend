@@ -1,35 +1,36 @@
 from flask import Flask, request, jsonify
 import os
-import requests
+from groq import Groq
 
 app = Flask(__name__)
 
-REPLICATE_API_TOKEN = os.environ.get("REPLICATE_API_TOKEN")
+# ENV
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+
+client = Groq(api_key=GROQ_API_KEY)
+
+SYSTEM_PROMPT = "You are lEvO, a calm and accurate AI assistant."
 
 @app.route("/chat", methods=["POST"])
 def chat():
-    user_msg = request.json.get("message")
+    data = request.json
+    user_msg = data.get("message", "")
 
-    response = requests.post(
-        "https://api.replicate.com/v1/predictions",
-        headers={
-            "Authorization": f"Token {REPLICATE_API_TOKEN}",
-            "Content-Type": "application/json"
-        },
-        json={
-            "version": "meta/llama-2-7b-chat",
-            "input": {
-                "prompt": user_msg
-            }
-        }
+    completion = client.chat.completions.create(
+        model="llama-3.1-8b-instant",  # ✅ FREE
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_msg}
+        ],
+        max_tokens=1024
     )
 
-    data = response.json()
-    return jsonify({"reply": data})
+    reply = completion.choices[0].message.content
+    return jsonify({"reply": reply})
 
 @app.route("/")
 def home():
-    return "Chat server running"
+    return "lEvO chat server running (Groq free model)"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
